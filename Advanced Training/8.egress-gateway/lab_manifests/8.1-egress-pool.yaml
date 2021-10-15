@@ -1,8 +1,0 @@
-apiVersion: projectcalico.org/v3
-kind: IPPool
-metadata:
-  name: egress-ippool-1
-spec:
-  cidr: 10.50.0.0/31
-  blockSize: 31
-  nodeSelector: "!all()"
