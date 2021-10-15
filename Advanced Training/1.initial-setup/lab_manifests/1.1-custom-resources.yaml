@@ -1,0 +1,250 @@
+# This section includes base Calico Enterprise installation configuration.
+# For more information, see: https://docs.tigera.io/v3.7/reference/installation/api#operator.tigera.io/v1.Installation
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  # Install Calico Enterprise
+  variant: TigeraSecureEnterprise
+
+  # Define a smaller cidr for the pods
+  calicoNetwork:
+    ipPools:
+    - cidr: "10.48.0.0/24"
+      encapsulation: None
+
+  # List of image pull secrets to use when installing images from a container registry.
+  # If specified, secrets must be created in the `tigera-operator` namespace.
+  imagePullSecrets:
+    - name: tigera-pull-secret
+
+  # Optionally, a custom registry to use for pulling images.
+  # registry: <my-registry>
+
+---
+
+# This section configures the Tigera web manager.
+# Remove this section for a Managed cluster.
+# For more information, see: https://docs.tigera.io/v3.7/reference/installation/api#operator.tigera.io/v1.Manager
+apiVersion: operator.tigera.io/v1
+kind: Manager
+metadata:
+  name: tigera-secure
+spec:
+  # Authentication configuration for accessing the Tigera manager.
+  # Default is to use token-based authentication.
+  auth:
+    type: Token
+
+---
+
+# This section installs and configures the Calico Enterprise API server.
+# For more information, see: https://docs.tigera.io/v3.7/reference/installation/api#operator.tigera.io/v1.APIServer
+apiVersion: operator.tigera.io/v1
+kind: APIServer
+metadata:
+  name: tigera-secure
+
+---
+
+# This section installs and configures Calico Enterprise compliance functionality.
+# For more information, see: https://docs.tigera.io/v3.7/reference/installation/api#operator.tigera.io/v1.Compliance
+apiVersion: operator.tigera.io/v1
+kind: Compliance
+metadata:
+  name: tigera-secure
+
+---
+
+# This section installs and configures Calico Enterprise intrusion detection functionality.
+# For more information, see: https://docs.tigera.io/v3.7/reference/installation/api#operator.tigera.io/v1.IntrusionDetection
+apiVersion: operator.tigera.io/v1
+kind: IntrusionDetection
+metadata:
+  name: tigera-secure
+
+---
+
+# This section configures the Elasticsearch cluster used by Calico Enterprise.
+# Remove this section for a Managed cluster.
+# For more information, see: https://docs.tigera.io/v3.7/reference/installation/api#operator.tigera.io/v1.LogStorage
+apiVersion: operator.tigera.io/v1
+kind: LogStorage
+metadata:
+  name: tigera-secure
+spec:
+  nodes:
+    count: 1
+
+---
+
+# This section configures collection of Tigera flow, DNS, and audit logs.
+# For more information, see: https://docs.tigera.io/v3.7/reference/installation/api#operator.tigera.io/v1.LogCollector
+apiVersion: operator.tigera.io/v1
+kind: LogCollector
+metadata:
+  name: tigera-secure
+
+---
+
+
+---
+# Source: tigera-operator/templates/crs/prometheus/alertmanager.yaml
+
+# This section installs a Prometheus alert manager.
+apiVersion: monitoring.coreos.com/v1
+kind: Alertmanager
+metadata:
+  name: calico-node-alertmanager
+  namespace: tigera-prometheus
+spec:
+  version: v0.20.0
+  baseImage: quay.io/prometheus/alertmanager
+  nodeSelector:
+    kubernetes.io/os: linux
+  replicas: 3
+
+
+
+---
+# Source: tigera-operator/templates/crs/prometheus/prometheus.yaml
+
+# This section configures the Calico Enterprise Prometheus deployment.
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: calico-node-prometheus
+  namespace: tigera-prometheus
+spec:
+  baseImage: quay.io/prometheus/prometheus
+  nodeSelector:
+    kubernetes.io/os: linux
+  serviceAccountName: prometheus
+  serviceMonitorSelector:
+    matchLabels:
+      team: network-operators
+  podMonitorSelector:
+    matchLabels:
+      team: network-operators
+  version: v2.17.2
+  retention: 24h
+  resources:
+    requests:
+      memory: 400Mi
+  ruleSelector:
+    matchLabels:
+      role: tigera-prometheus-rules
+      prometheus: calico-node-prometheus
+  alerting:
+    alertmanagers:
+      - namespace: tigera-prometheus
+        name: calico-node-alertmanager
+        port: web
+        scheme: http
+
+
+
+---
+# Source: tigera-operator/templates/crs/prometheus/prometheusrule.yaml
+
+# This section configures denied packets alerting rules in Prometheus.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: tigera-prometheus-dp-rate
+  namespace: tigera-prometheus
+  labels:
+    role: tigera-prometheus-rules
+    prometheus: calico-node-prometheus
+spec:
+  groups:
+  - name: calico.rules
+    rules:
+    - alert: DeniedPacketsRate
+      expr: rate(calico_denied_packets[10s]) > 50
+      labels:
+        severity: critical
+      annotations:
+        summary: "Instance {{$labels.instance}} - Large rate of packets denied"
+        description: "{{$labels.instance}} with calico-node pod {{$labels.pod}} has been denying packets at a fast rate {{$labels.sourceIp}} by policy {{$labels.policy}}."
+
+
+
+---
+# Source: tigera-operator/templates/crs/prometheus/servicemonitor.yaml
+
+# This section configures Prometheus monitoring of calico/node metrics.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: calico-node-monitor
+  namespace: tigera-prometheus
+  labels:
+    team: network-operators
+spec:
+  selector:
+    matchLabels:
+      k8s-app: calico-node
+  namespaceSelector:
+    matchNames:
+    - calico-system
+  endpoints:
+  - port: calico-metrics-port
+    interval: 5s
+    scrapeTimeout: 5s
+    honorLabels: true
+  - port: calico-bgp-metrics-port
+    interval: 5s
+    scrapeTimeout: 5s
+    honorLabels: true
+
+
+
+---
+# Source: tigera-operator/templates/crs/prometheus/elasticsearch_servicemonitor.yaml
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: elasticsearch-metrics
+  namespace: tigera-prometheus
+  labels:
+    team: network-operators
+spec:
+  selector:
+    matchLabels:
+      k8s-app: tigera-elasticsearch-metrics
+  namespaceSelector:
+    matchNames:
+      - tigera-elasticsearch
+  endpoints:
+    - port: metrics-port
+      interval: 5s
+      scrapeTimeout: 5s
+      honorLabels: true
+
+
+
+---
+# Source: tigera-operator/templates/crs/prometheus/fluentd_podmonitor.yaml
+
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: fluentd-metrics
+  namespace: tigera-prometheus
+  labels:
+    team: network-operators
+spec:
+  selector:
+    matchLabels:
+      k8s-app: fluentd-node
+  namespaceSelector:
+    matchNames:
+      - tigera-fluentd
+  podMetricsEndpoints:
+    - port: metrics-port
+      interval: 5s
+      scrapeTimeout: 5s
+      honorLabels: true
