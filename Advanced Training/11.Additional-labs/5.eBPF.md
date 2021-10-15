@@ -1,0 +1,454 @@
+# *ENABLE eBPF and Troubleshoot* #
+
+# Pre enable Checks: #
+
+*Connect on master node and compute node and ensure they have supported kernel:
+Run the following commands on each node:*
+
+    tigera@bastion:~$ uname -rv
+
+The output should look like this:
+
+    5.4.0-42-generic #46-Ubuntu SMP Fri Jul 10 00:24:02 UTC 2020
+
+To verify that the BPF filesystem is mounted, on the host, you can run the following command:
+
+    tigera@bastion:~$ mount | grep "/sys/fs/bpf"
+ 
+If the BPF filesystem is mounted, you should see:
+
+    none on /sys/fs/bpf type bpf (rw,nosuid,nodev,noexec,relatime,mode=700)
+
+-  
+- **Configure Calico Enterprise to talk directly to the API server**
+
+In eBPF mode, Calico Enterprise implements Kubernetes service networking directly (rather than relying on kube-proxy). This means that, like kube-proxy, Calico Enterprise must connect directly to the Kubernetes API server rather than via the API server’s ClusterIP.
+
+First, make a note of the address of the API server:
+
+API server, IP address and port  can be found by running:
+
+    tigera@bastion:~$ kubectl get endpoints kubernetes -o wide
+
+The output should look like the following, with a single IP address and port under “ENDPOINTS”:
+
+    NAME ENDPOINTS AGE
+    kubernetes   172.16.101.157:6443   40m
+ 
+Then, create the following config map in the tigera-operator namespace using the host and port determined above:
+
+
+Create a file called `tigera@bastion:~$ vi api_configmap.yaml`
+
+    kind: ConfigMap
+    apiVersion: v1
+    metadata:
+      name: kubernetes-services-endpoint
+      namespace: tigera-operator
+    data:
+      KUBERNETES_SERVICE_HOST: "10.0.1.20"
+      KUBERNETES_SERVICE_PORT: "6443"
+
+Apply the configuration ```$ kubectl apply -f api_configmap.yaml```
+ 
+Wait 60s for kubelet to pick up the ConfigMap (see Kubernetes issue #30189); then, restart the operator to pick up the change:
+
+    tigera@bastion:~$ kubectl delete pod -n tigera-operator -l k8s-app=tigera-operator
+ 
+The operator will then do a rolling update of Calico Enterprise to pass on the change. Confirm that pods restart and then reach the Running state with the following command:
+
+
+    watch kubectl get pods -n calico-system
+ 
+***Note:*** If you do not see the pods restart then it’s possible that the ConfigMap wasn’t picked up (sometimes Kubernetes is slow to propagate ConfigMap ). You can try restarting the operator again.
+
+- **Configure kube-proxy**
+
+
+In eBPF mode Calico Enterprise replaces kube-proxy so it wastes resources to run both. This section explains how to disable kube-proxy in some common environments.
+
+Clusters that run kube-proxy with a DaemonSet (such as kubeadm)
+Use the following command:
+
+
+    tigera@bastion:~$ kubectl patch ds -n kube-system kube-proxy -p '{"spec":{"template":{"spec":{"nodeSelector":{"non-calico": "true"}}}}}'
+ 
+ 
+# Enable eBPF mode #
+
+To enable eBPF mode, change the spec.calicoNetwork.linuxDataplane parameter in the operator’s Installation resource to "BPF"; you must also clear the hostPorts setting because host ports are not supported in BPF mode:
+
+
+    tigera@bastion:~$ kubectl patch installation.operator.tigera.io default --type merge -p '{"spec":{"calicoNetwork":{"linuxDataplane":"BPF", "hostPorts":null}}}'
+ 
+ 
+ **Enable DSR mode**
+-
+DSR mode is disabled by default. To enable it, set the BPFExternalServiceMode Felix configuration parameter to "DSR".
+
+This can be done with kubectl:
+
+
+    tigera@bastion:~$ kubectl patch felixconfiguration.projectcalcio.org default --patch='{"spec": {"bpfExternalServiceMode": "DSR"}}'
+ 
+To switch back to tunneled mode, set the configuration parameter to "Tunnel":
+
+
+    tigera@bastion:~$ kubectl patch felixconfiguration.projectcalico.org default --patch='{"spec": {"bpfExternalServiceMode": "Tunnel"}}'
+ 
+ 
+# After install Checks: #
+ 
+Check each calico-node pods enabled BPF successful:
+
+    tigera@bastion:~$ kubectl get pods -n calico-system -o wide | grep node
+    calico-node-84r2t 1/1 Running   0  4m26s   10.0.1.20  ip-10-0-1-20   <none>   <none>
+    calico-node-cqm54 1/1 Running   0  4m15s   10.0.1.31  ip-10-0-1-31   <none>   <none>
+    calico-node-nhn52 1/1 Running   0  4m2s    10.0.1.30  ip-10-0-1-30   <none>   <none>
+
+
+    
+
+---- 
+***Your node name hash will be different from what is in this document.***
+
+    tigera@bastion:~$ kubectl logs -n calico-system calico-node-sm6zw  | grep -w "BPF enabled"
+    
+    2021-04-28 13:39:59.112 [INFO][485] felix/int_dataplane.go 713: BPF enabled, starting BPF endpoint manager and map manager.
+    
+    2021-04-28 13:40:09.249 [INFO][485] felix/int_dataplane.go 2025: BPF enabled, disabling unprivileged BPF usage.
+
+-----
+
+# Checking if the eBPF is enforced. #
+
+This can be checked directly on the node or via the calico-node pod
+SSH in controller node if you are on bastion host.
+    ssh ubuntu@10.0.1.20
+
+***Method 1 = Node***
+
+    ubuntu@ip-10-0-1-20:~$ tc -s qdisc show | grep clsact -A 2
+    qdisc clsact ffff: dev ens160 parent ffff:fff1 
+     Sent 11334937500 bytes 75228997 pkt (dropped 0, overlimits 0 requeues 0) 
+     backlog 0b 0p requeues 0
+    
+    qdisc clsact ffff: dev calic1faebfe4cf parent ffff:fff1 
+     Sent 187308488 bytes 1696880 pkt (dropped 11, overlimits 0 requeues 0) 
+     backlog 0b 0p requeues 0
+    
+    qdisc clsact ffff: dev caliccba8bb4a6f parent ffff:fff1 
+     Sent 492459240 bytes 1736334 pkt (dropped 0, overlimits 0 requeues 0) 
+     backlog 0b 0p requeues 0
+
+   
+The output will be longer for the purpose of this example. We reduce the length of output.
+ 
+
+***Method 2 = Pod***
+
+Note use `$ kubectl get pods -n calico-system -o wide | grep node` to get the node calico node name running on `10.0.1.20`
+
+    ubuntu@ip-10-0-1-20:~$ kubectl exec -n calico-system calico-node-84r2t -- tc -s qdisc show | grep clsact -A 2
+    qdisc clsact ffff: dev ens5 parent ffff:fff1
+     Sent 21671393 bytes 63511 pkt (dropped 0, overlimits 0 requeues 0)
+     backlog 0b 0p requeues 0
+    
+    qdisc clsact ffff: dev tunl0 parent ffff:fff1
+     Sent 4752228 bytes 24358 pkt (dropped 0, overlimits 0 requeues 0)
+     backlog 0b 0p requeues 0
+    
+    qdisc clsact ffff: dev cali2896b5b2df4 parent ffff:fff1
+     Sent 2032243 bytes 1880 pkt (dropped 0, overlimits 0 requeues 0)
+     backlog 0b 0p requeues 0
+    
+    qdisc clsact ffff: dev calif903a7f3bc2 parent ffff:fff1
+     Sent 2507245 bytes 22767 pkt (dropped 46, overlimits 0 requeues 0)
+     backlog 0b 0p requeues 0
+
+
+
+The output will be longer for the purpose of this example. We reduce the length of output
+ 
+ 
+ 
+# Using calico-node bpf tool inside node: #
+
+*Get the calico nodes names:* 
+
+    ubuntu@ip-10-0-1-20:~$ kubectl get pods -n calico-system -o wide | grep node
+    calico-node-84r2t 1/1 Running   0  4m26s   10.0.1.20  ip-10-0-1-20   <none>   <none>
+    calico-node-cqm54 1/1 Running   0  4m15s   10.0.1.31  ip-10-0-1-31   <none>   <none>
+    calico-node-nhn52 1/1 Running   0  4m2s    10.0.1.30  ip-10-0-1-30   <none>   <none>
+    
+*Run command inside calico node name:*
+
+    ubuntu@ip-10-0-1-20:~$ kubectl exec -n calico-system calico-node-84r2t -- calico-node -bpf help
+    tool for interrogating Calico BPF state
+    
+    Usage:
+      calico-bpf [command]
+    
+    Available Commands:
+      arp  Manipulates arp
+      connect-time Manipulates connect-time load balancing programs
+      conntrackManipulates connection tracking
+      help Help about any command
+      ipsets   Manipulates ipsets
+      nat  Nanipulates network address translation (nat)
+      routes   Manipulates routes
+      version  Prints the version and exits
+    
+    Flags:
+      --config string   config file (default is $HOME/.calico-bpf.yaml)
+      -h, --helphelp for calico-bpf
+      -t, --toggle  Help message for toggle
+    
+    Use "calico-bpf [command] --help" for more information about a command.
+
+-----
+
+# Understanding routes in eBPF: #
+
+BPF program route packets before reaching routing Linux tables however it BPF is relaying on Linux routing table:
+
+**Linux routing table**
+
+    ubuntu@ip-10-0-1-20:~$ip route show
+    default via 10.0.1.1 dev ens5 proto dhcp src 10.0.1.20 metric 100
+    10.0.1.0/24 dev ens5 proto kernel scope link src 10.0.1.20
+    10.0.1.1 dev ens5 proto dhcp scope link src 10.0.1.20 metric 100
+    10.48.7.64/26 via 10.0.1.30 dev tunl0 proto bird onlink
+    blackhole 10.48.32.192/26 proto bird
+    10.48.32.195 dev cali2896b5b2df4 scope link
+    10.48.32.196 dev calif903a7f3bc2 scope link
+    10.48.32.197 dev calia7a92b8d91c scope link
+    10.48.32.198 dev cali086ab313818 scope link
+    10.48.32.199 dev cali2e939172c25 scope link
+    10.48.32.200 dev caliac215715fe6 scope link
+    10.48.32.201 dev cali490acbd79f7 scope link
+    10.48.162.128/26 via 10.0.1.31 dev tunl0 proto bird onlink
+    172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1 linkdown
+ 
+
+
+
+**BPF routing table**
+
+    ubuntu@ip-10-0-1-20:~$ kubectl exec -n calico-system calico-node-84r2t -- calico-node -bpf routes dump
+    2021-05-10 10:59:28.353 [INFO][2445] confd/maps.go 313: Loaded map file descriptor. fd=0x7 name="/sys/fs/bpf/tc/globals/cali_v4_routes"
+       10.0.1.20/32: local host
+       10.0.1.30/32: remote host
+       10.0.1.31/32: remote host
+       10.48.0.0/16: remote in-pool nat-out
+      10.48.7.64/26: remote workload in-pool nat-out nh 10.0.1.30
+    10.48.32.192/32: local host
+    10.48.32.195/32: local workload in-pool nat-out idx 11
+    10.48.32.196/32: local workload in-pool nat-out idx 12
+    10.48.32.197/32: local workload in-pool nat-out idx 13
+    10.48.32.198/32: local workload in-pool nat-out idx 14
+    10.48.32.199/32: local workload in-pool nat-out idx 15
+    10.48.32.200/32: local workload in-pool nat-out idx 16
+    10.48.32.201/32: local workload in-pool nat-out idx 19
+    10.48.162.128/26: remote workload in-pool nat-out nh 10.0.1.31
+      172.17.0.1/32: local host
+
+
+
+- `10.0.1.20/32: local host` = ip is a node ip
+- `10.0.1.30/32: remote host` = ip is a remote node ip
+- `10.48.162.128/26: remote workload in-pool nat-out nh 10.0.1.31` = remote pod network on node -> 10.0.1.31
+- `10.255.241.69/32: local workload in-pool nat-out idx 77` = local pod 
+
+
+
+# BPF nat rules: #
+
+    ubuntu@ip-10-0-1-20:~$ kubectl get svc -n yaobank
+    NAME       TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)  AGE
+    customer   ClusterIP   10.49.82.5    <none>        80/TCP   140m
+    database   ClusterIP   10.49.10.100  <none>        2379/TCP 140m
+    summary    ClusterIP   10.49.154.85  <none>        80/TCP   140m
+    ubuntu@ip-10-0-1-20:~$ kubectl get svc -n tigera-manager
+    NAME                     TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
+    tigera-manager           ClusterIP   10.49.168.197   <none>        9443/TCP         2d20h
+    tigera-manager-external  NodePort    10.49.205.93    <none>        9443:30003/TCP   2d20h
+    
+
+
+    ubuntu@ip-10-0-1-20:~$ kubectl exec -n calico-system calico-node-84r2t -- calico-node -bpf nat dump
+    2021-05-10 11:05:45.649 [INFO][3708] confd/maps.go 313: Loaded map file descriptor. fd=0x7 name="/sys/fs/bpf/tc/globals/cali_v4_nat_fe2"
+    2021-05-10 11:05:45.650 [INFO][3708] confd/maps.go 313: Loaded map file descriptor. fd=0x8 name="/sys/fs/bpf/tc/globals/cali_v4_nat_be"
+    10.49.10.100 port 2379 proto 6 id 21 count 1 local 0
+    	21:0 10.48.7.86:2379
+    ...
+    10.49.205.93 port 9443 proto 6 id 12 count 1 local 1
+    	12:0 10.48.32.200:9443
+    ...
+    10.49.82.5 port 80 proto 6 id 18 count 1 local 0
+    	18:0 10.48.162.144:8000
+    10.49.168.197 port 9443 proto 6 id 14 count 1 local 1
+    	14:0 10.48.32.200:9443
+    ...
+    10.0.1.20 port 30003 proto 6 id 12 count 1 local 1
+    	12:0 10.48.32.200:9443
+    ...
+    10.49.154.85 port 80 proto 6 id 4 count 1 local 0
+    	4:0  10.48.7.87:8000
+    ...
+
+***Each field explained:***
+
+    [service ip] [service port] [protocol number] [id] [count] [local]
+    [id:countid] [pod ip:port]
+
+> [service ip] - kubernetes clusterIP/externalIp/nodeIP
+> 
+> [service port] -  kubernetes - Service port
+> 
+> [protocol number] - Protocol number used 
+> 
+> [id] - identification number (unique)
+> 
+> [count] - number of pods on this service
+> 
+> [local] - how many pods are local on current node
+> 
+> [id:countid] - “identification number”:”each pod ip have assigned id”
+> 
+> [pod ip:port]
+
+
+# BPF ipsests: #
+
+    ubuntu@ip-10-0-1-20:~$ kubectl exec -n calico-system calico-node-84r2t -- calico-node -bpf ipsets dump
+    2021-05-10 11:10:12.086 [INFO][4611] confd/maps.go 313: Loaded map file descriptor. fd=0x7 name="/sys/fs/bpf/tc/globals/cali_v4_ip_sets"
+    IP set 0x100000001
+       10.49.0.10:53 (proto 17)
+    
+    IP set 0xa48e493196cddbb
+       10.0.1.20/32
+    
+    IP set 0x1451213aebb2fe8a
+       10.48.7.69/32
+    
+    IP set 0x1e69a881cefa300e
+       10.48.162.140/32
+    
+
+
+# BPF connection tracking: #
+
+    ubuntu@ip-10-0-1-20:~$ kubectl exec -n calico-system calico-node-84r2t -- calico-node -bpf conntrack dump | less
+    ConntrackKey{proto=6 10.0.1.20:6443 <-> 10.0.100.241:35510} -> Entry{Type:0, Created:253843922820121, LastSeen:253844042814512, Flags: <none> Data: {A2B:{Bytes:140 Packets:2 Seqno:2871352450 SynSeen:true AckSeen:true FinSeen:true RstSeen:false Whitelisted:false Opener:false Ifindex:0} B2A:{Bytes:272 Packets:4 Seqno:2473514777 SynSeen:true AckSeen:true FinSeen:true RstSeen:false Whitelisted:true Opener:true Ifindex:2} OrigDst:0.0.0.0 OrigPort:0 TunIP:0.0.0.0}} Age: 1.178198172s Active ago 1.058203781s CLOSED
+    
+    ConntrackKey{proto=6 10.48.32.200:9443 <-> 10.0.100.241:32628} -> Entry{Type:2, Created:253829881145823, LastSeen:253829910183842, Flags: <none> Data: {A2B:{Bytes:140 Packets:2 Seqno:2722366807 SynSeen:true AckSeen:true FinSeen:true RstSeen:false Whitelisted:true Opener:false Ifindex:0} B2A:{Bytes:272 Packets:4 Seqno:3020788598 SynSeen:true AckSeen:true FinSeen:true RstSeen:false Whitelisted:true Opener:true Ifindex:2} OrigDst:10.0.1.20 OrigPort:30003 TunIP:0.0.0.0}} Age: 15.220220233s Active ago 15.191182214s CLOSED
+    
+    ConntrackKey{proto=17 10.48.7.66:53 <-> 10.48.32.195:46851} -> Entry{Type:0, Created:253796864945916, LastSeen:253796865695820, Flags:16 Data: {A2B:{Bytes:504 Packets:2 Seqno:0 SynSeen:false AckSeen:false FinSeen:false RstSeen:false Whitelisted:true Opener:false Ifindex:0} B2A:{Bytes:278 Packets:2 Seqno:0 SynSeen:false AckSeen:false FinSeen:false RstSeen:false Whitelisted:true Opener:true Ifindex:11} OrigDst:0.0.0.0 OrigPort:0 TunIP:0.0.0.0}} Age: 48.237002075s Active ago 48.236252171s
+
+    
+
+# Change BPF in debug mode #
+
+1. Ensure `calicoctl` is installed. Follow the steps from previous labs.
+ 
+2. Set Felix `bpfLogLevel` to Debug (Info not so useful at this stage)
+
+	Enables a firehose of logs to the BPF trace pipe
+
+3. To tail the log: `sudo tc exec bpf debug`
+
+	Every decision point for every packet is logged!
+
+- Get felixconfigruation:
+-
+
+    ubuntu@ip-10-0-1-20:~$ calicoctl get felixconfigurations default -o yaml
+    apiVersion: projectcalico.org/v3
+    kind: FelixConfiguration
+    metadata:
+      creationTimestamp: "2021-03-11T18:52:26Z"
+      name: default
+      resourceVersion: "11336796"
+      uid: 0e57caaa-6a04-48cb-8bb6-3c4e4ca44c4a
+    spec:
+      bpfEnabled: true
+      bpfExternalServiceMode: DSR
+      bpfKubeProxyIptablesCleanupEnabled: false
+      flowLogsCollectProcessInfo: true
+      logSeverityScreen: Info
+      prometheusMetricsEnabled: true
+      reportingInterval: 0s
+
+
+- Patch felixconfiguration:
+-
+
+    ubuntu@ip-10-0-1-20:~$ calicoctl patch felixconfiguration default --patch='{"spec": {"bpfLogLevel": "Debug"}}'
+
+    Successfully patched 1 'FelixConfiguration' resource
+
+- Check felixconfiguration to ensure the BPF is in debug mode 
+-
+
+    ubuntu@ip-10-0-1-20:~$ calicoctl get felixconfigurations default -o yaml
+    apiVersion: projectcalico.org/v3
+    kind: FelixConfiguration
+    metadata:
+      creationTimestamp: "2021-03-11T18:52:26Z"
+      name: default
+      resourceVersion: "11336796"
+      uid: 0e57caaa-6a04-48cb-8bb6-3c4e4ca44c4a
+    spec:
+      bpfEnabled: true
+      bpfExternalServiceMode: DSR
+      bpfKubeProxyIptablesCleanupEnabled: false
+      bpfLogLevel: Debug
+      flowLogsCollectProcessInfo: true
+      logSeverityScreen: Info
+      prometheusMetricsEnabled: true
+      reportingInterval: 0s
+
+Run tc in debug mode: `ubuntu@ip-10-0-1-20:~$sudo tc exec bpf debug`
+
+`<...>-84582 [000] .Ns1  6851.690474: 0: ens192---E: Final result=ALLOW (-1). Program execution time: 7366ns`                                                     
+
+> [84582] - PID that triggered NAPI poll (often useful)
+> 
+> [000] - CPU number
+> 
+>[6851.690474] - Timestamp
+>
+>[0:] - Calico program ID then 
+>[ens192] - Interface caliXXX, ethXX
+>[---E:] - E=egress, I=ingress, C=connect-time
+> 
+>[Final result=ALLOW (-1). Program execution time: 7366ns] - Message
+> 
+
+
+# Reversing to iptables datapath #
+
+To revert to standard Linux networking:
+
+Reverse the changes to the operator’s Installation:
+
+    tigera@bastion:~$ kubectl patch installation.operator.tigera.io default --type merge -p '{"spec":{"calicoNetwork":{"linuxDataplane":"Iptables"}}}'
+	or
+	ubuntu@ip-10-0-1-20:~$ kubectl patch installation.operator.tigera.io default --type merge -p '{"spec":{"calicoNetwork":{"linuxDataplane":"Iptables"}}}'
+If you disabled kube-proxy, re-enable it (for example, by removing the node selector added above).
+
+    tigera@bastion:~$ kubectl patch ds -n kube-system kube-proxy --type merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"non-calico": null}}}}}'
+	or
+	ubuntu@ip-10-0-1-20 :~$ kubectl patch ds -n kube-system kube-proxy --type merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"non-calico": null}}}}}'
+Monitor existing workloads to make sure they re-establish any connections disrupted by the switch.
+
+After you see the kube-poxy pods are back please check the following controller node.
+
+    ubuntu@ip-10-0-1-20:~$ kubectl get pods -n kube-system -o wide | grep proxy
+    kube-proxy-w8hl6   1/1 Running   0  4m5s	10.0.1.30   ip-10-0-1-30   <none>   <none>
+    kube-proxy-zgv8f   1/1 Running   0  4m5s	10.0.1.31   ip-10-0-1-31   <none>   <none>
+    kube-proxy-zj8qn   1/1 Running   0  4m5s    10.0.1.20   ip-10-0-1-20   <none>   <none>
+
+    ubuntu@ip-10-0-1-20:~$ tc -s qdisc show | grep clsact -A 2
+    ubuntu@ip-10-0-1-20:~$

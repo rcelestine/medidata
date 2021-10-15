@@ -1,0 +1,14 @@
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkPolicy
+metadata:
+  name: security.quarantine
+spec:
+  egress:
+  - action: Deny
+    destination: {}
+    source: {}
+  order: 0
+  selector: sec == "quarantine"
+  tier: security
+  types:
+  - Egress
