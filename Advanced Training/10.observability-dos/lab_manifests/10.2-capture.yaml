@@ -1,0 +1,7 @@
+apiVersion: projectcalico.org/v3
+kind: PacketCapture
+metadata:
+  name: attacker-pcap
+  namespace: default
+spec:
+  selector: app == "attacker-app"
