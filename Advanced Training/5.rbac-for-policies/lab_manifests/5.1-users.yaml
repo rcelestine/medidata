@@ -1,0 +1,15 @@
+# security team
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: secuser
+  namespace: default
+  
+---
+
+# developer team
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devuser
+  namespace: default

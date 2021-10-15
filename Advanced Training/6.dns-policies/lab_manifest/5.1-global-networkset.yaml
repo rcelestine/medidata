@@ -1,0 +1,18 @@
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkSet
+metadata:
+  name: trusted-repos
+  labels:
+    external-ep: trusted-repos
+spec:
+  allowedEgressDomains:
+    - '*.docker.com'
+    - '*.quay.io'
+    - '*.ubuntu.com'
+    - '*.docker.io'
+    - 'docker.com'
+    - 'quay.io'
+    - 'ubuntu.com'
+    - 'docker.io'
+
+

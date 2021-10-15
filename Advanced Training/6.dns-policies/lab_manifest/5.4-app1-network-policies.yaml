@@ -1,0 +1,22 @@
+
+apiVersion: projectcalico.org/v3
+kind: NetworkPolicy
+metadata:
+  name: application.ingress-egress-to-and-from-app1
+  namespace: app1
+spec:
+  tier: application
+  order: 200
+  selector: app == "app1"
+  types:
+    - Ingress  
+    - Egress
+  ingress:
+    - action: Deny
+  egress:
+    - action: Allow
+      destination:
+        selector: external-ep == 'app1-trusted-domains'
+
+
+

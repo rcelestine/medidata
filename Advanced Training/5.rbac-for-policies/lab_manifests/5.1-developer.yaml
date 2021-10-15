@@ -1,0 +1,86 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: tier-reader-dev
+rules:
+- apiGroups: ["projectcalico.org"]
+  resources: ["tiers"]
+  resourceNames: ["default"]
+  verbs: ["get"]
+# only allow to view global and namespaced policies in default tier
+- apiGroups: ["projectcalico.org"]
+  resources: ["tier.networkpolicies"]
+  resourceNames: ["default.*"]
+  verbs: ["get","list"]
+  
+---
+
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ui-policy-board-reader-dev
+rules:
+- apiGroups: ["networking.k8s.io","extensions",""]
+  resources: ["networkpolicies","namespaces"]
+  verbs: ["get","watch","list"]
+- apiGroups: ["projectcalico.org"]
+  resources: ["tiers","tier.networkpolicies"]
+  verbs: ["get","watch","list"]
+# access to see policy board
+- apiGroups: ["projectcalico.org"]
+  resources: ["clusterinformations"]
+  verbs: ["get","list"]
+
+---
+
+##############################################
+# allow read access to default tier
+##############################################
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: tier-reader-dev
+subjects:
+- kind: ServiceAccount
+  name: devuser
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: tier-reader-dev
+  apiGroup: rbac.authorization.k8s.io
+  
+---
+
+##############################################
+# grant access to APIs in Enterprise Manager UI
+##############################################
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: tmui-traffic-stats-access-dev
+subjects:
+- kind: ServiceAccount
+  name: devuser
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: ui-traffic-stats
+  apiGroup: rbac.authorization.k8s.io
+  
+---
+
+##############################################
+# grant access to Enterpris Manager policy board view
+##############################################
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: tmui-policy-board-access-dev
+subjects:
+- kind: ServiceAccount
+  name: devuser
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: ui-policy-board-reader-dev
+  apiGroup: rbac.authorization.k8s.io
