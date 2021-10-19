@@ -1,0 +1,31 @@
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkPolicy
+metadata:
+  name: platform.bastionfirewall
+spec:
+  egress:
+  - action: Allow
+    destination:
+      ports:
+      - 80
+      - 443
+    protocol: TCP
+  ingress:
+  - action: Allow
+    destination:
+      ports:
+      - 7777
+    protocol: TCP
+    source:
+      selector: has(node-role.kubernetes.io/worker)||egress-code == "red"||app == "app1"
+  - action: Allow
+    destination:
+      ports:
+      - 80
+    protocol: TCP
+    source: {}
+  selector: type == "bastion"||bastion == "true"
+  tier: platform
+  types:
+  - Ingress
+  - Egress

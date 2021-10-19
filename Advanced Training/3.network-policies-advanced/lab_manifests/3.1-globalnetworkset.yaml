@@ -1,0 +1,49 @@
+---
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkSet
+metadata:
+  name: loopback-cidr
+  labels:
+    loopback-cidr: 'true'
+spec:
+  nets:
+    - 127.0.0.0/8
+
+---
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkSet
+metadata:
+  name: bastion
+  labels:
+    bastion: 'true'
+    type: 'bastion'
+spec:
+  nets:
+    - 10.0.1.10/32
+
+---
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkSet
+metadata:
+  name: kube-api
+  labels:
+    kube-api: 'true'
+spec:
+  allowedEgressDomains:
+    - '*.lynx.tigera.ca'
+
+---
+
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkSet
+metadata:
+  name: trusted-repos
+  labels:
+    external-ep: trusted-repos
+spec:
+  allowedEgressDomains:
+    - '*.docker.com'
+    - '*.quay.io'
+    - '*.ubuntu.com'
+    - '*.docker.io'
+    - gcr.io

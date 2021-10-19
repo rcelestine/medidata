@@ -1,0 +1,13 @@
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkPolicy
+metadata:
+  name: allow-tenant1-icmp
+spec:
+  ingress:
+  - action: Allow
+    protocol: ICMP
+  order: 10
+  selector: tenant == "tenant1"
+  tier: application
+  types:
+  - Ingress

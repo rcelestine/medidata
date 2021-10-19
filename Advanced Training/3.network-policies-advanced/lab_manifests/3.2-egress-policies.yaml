@@ -1,0 +1,16 @@
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkPolicy
+metadata:
+  name: security.egress-allow-from-and-to-pods-and-hosts
+spec:
+  tier: security
+  order: 2
+  selector: all()
+  types:
+    - Egress
+  egress:
+    - action: Allow
+      destination:
+        selector: all()
+
+

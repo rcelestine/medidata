@@ -1,0 +1,36 @@
+---
+
+apiVersion: projectcalico.org/v3
+kind: NetworkPolicy
+metadata:
+  name: security.ingress-allow-pods-to-kubedns
+  namespace: kube-system
+spec:
+  tier: security
+  order: 1
+  selector: k8s-app == "kube-dns"
+  types:
+    - Ingress
+    - Egress
+  ingress:
+  - action: Allow
+    destination:
+      ports:
+      - 53
+    protocol: UDP
+  - action: Allow
+    destination:
+      ports:
+      - 53
+    protocol: TCP
+  egress:
+  - action: Allow
+    destination:
+      ports:
+      - 53
+    protocol: UDP
+  - action: Allow
+    destination:
+      ports:
+      - 53
+    protocol: TCP

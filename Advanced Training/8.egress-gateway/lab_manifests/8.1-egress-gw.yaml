@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: egress-gateway
+  namespace: app1
+  labels:
+    egress-code: red
+spec:
+  selector:
+    matchLabels:
+      egress-code: red
+  template:
+    metadata:
+      annotations:
+        cni.projectcalico.org/ipv4pools: "[\"10.50.0.0/31\"]"
+      labels:
+        egress-code: red
+    spec:
+      imagePullSecrets:
+      - name: egress-pull-secret
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+      - name: egress-gateway
+        image: quay.io/tigera/egress-gateway:v3.7.0
+        env:
+        - name: EGRESS_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        securityContext:
+          privileged: true
+      terminationGracePeriodSeconds: 0
